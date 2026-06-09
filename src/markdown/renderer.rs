@@ -22,6 +22,7 @@ impl Renderer {
     ///
     /// # 返回
     /// 格式化后的预览文本
+    #[allow(dead_code)]
     pub fn render_preview(markdown: &str) -> String {
         // 纯文本模式：保留原始文本，仅去掉行首的标题标记
         // 不处理 * 等行内格式，避免破坏内容

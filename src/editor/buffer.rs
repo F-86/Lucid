@@ -1,8 +1,10 @@
 // 文本缓冲区 - 使用 ropey
 use std::result;
 
+#[allow(dead_code)]
 pub type Result<T> = result::Result<T, BufferError>;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum BufferError {
     InvalidPosition,
@@ -33,16 +35,19 @@ impl Buffer {
     }
 
     /// 清空缓冲区
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.content.clear();
     }
 
     /// 获取行数
+    #[allow(dead_code)]
     pub fn line_count(&self) -> usize {
         self.content.lines().count()
     }
 
     /// 获取字符数
+    #[allow(dead_code)]
     pub fn char_count(&self) -> usize {
         self.content.chars().count()
     }

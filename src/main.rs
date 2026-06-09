@@ -4,6 +4,7 @@ mod markdown;
 mod ui;
 
 use crate::editor::buffer::Buffer;
+use crate::editor::history::History;
 use crate::markdown::Renderer;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor};
 use iced::{Element, Length, Task, alignment};
@@ -24,6 +25,8 @@ pub struct App {
     is_modified: bool,
     /// 状态栏消息
     status_message: String,
+    /// 撤销/重做历史栈
+    history: History,
 }
 
 /// 处理消息并返回可能的异步任务
@@ -34,6 +37,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             // 实时更新预览 HTML
             app.preview_html = Renderer::render(&content);
             app.is_modified = true;
+            // 记录编辑历史
+            app.history.push(content);
             Task::none()
         }
 
@@ -43,6 +48,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             app.buffer.set_content(&content);
             app.preview_html = Renderer::render(&content);
             app.is_modified = true;
+            // 记录编辑历史
+            app.history.push(content.to_string());
             Task::none()
         }
 
@@ -148,6 +155,34 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+
+        Message::Undo => {
+            // 撤销：从撤销栈弹出前一个状态
+            if let Some(previous) = app.history.undo() {
+                app.editor_content = text_editor::Content::with_text(&previous);
+                app.buffer.set_content(&previous);
+                app.preview_html = Renderer::render(&previous);
+                app.is_modified = true;
+                app.status_message = "↶ 已撤销".to_string();
+            } else {
+                app.status_message = "⚠ 没有可撤销的操作".to_string();
+            }
+            Task::none()
+        }
+
+        Message::Redo => {
+            // 重做：从重做栈弹出下一个状态
+            if let Some(next) = app.history.redo() {
+                app.editor_content = text_editor::Content::with_text(&next);
+                app.buffer.set_content(&next);
+                app.preview_html = Renderer::render(&next);
+                app.is_modified = true;
+                app.status_message = "↷ 已重做".to_string();
+            } else {
+                app.status_message = "⚠ 没有可重做的操作".to_string();
+            }
+            Task::none()
+        }
     }
 }
 
@@ -168,6 +203,8 @@ fn view(app: &App) -> Element<'_, Message> {
     let toolbar = row![
         button("📁 打开").on_press(Message::FileOpen).padding(10),
         button("💾 保存").on_press(Message::FileSave).padding(10),
+        button("↶ 撤销").on_press(Message::Undo).padding(10),
+        button("↷ 重做").on_press(Message::Redo).padding(10),
         text(" "),
         file_status,
     ]
@@ -180,10 +217,10 @@ fn view(app: &App) -> Element<'_, Message> {
         container(
             text_editor(&app.editor_content)
                 .on_action(Message::EditorAction)
-                .padding(10)
+                .padding(10),
         )
         .width(Length::Fill)
-        .height(Length::Fill)
+        .height(Length::Fill),
     )
     .width(Length::FillPortion(1))
     .height(Length::Fill);
