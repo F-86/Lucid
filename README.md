@@ -8,8 +8,9 @@
 
 1. 阅读 `.claude/CLAUDE.md`（50 行规则）
 2. 查看 `docs/intro/overview.md`（项目概览）
-3. 按需查阅其他文档
-4. 开始编码
+3. 查看 `docs/tools/cmd.md`（开发工作流）
+4. 按需查阅其他文档
+5. 开始编码
 
 ---
 
@@ -28,10 +29,11 @@ docs/
 │  └─ rust.md                Rust 学习路线
 ├─ track/                    ← 进度相关
 │  ├─ status.md              项目进度
+│  ├─ implementation.md       实现细节
 │  ├─ todo.md                任务清单
 │  └─ check.md               完整性检查
 ├─ tools/                    ← 工具相关
-│  └─ cmd.md                 常用命令
+│  └─ cmd.md                 常用命令和工作流
 └─ ref/                      ← 参考相关
    └─ decisions.md           关键决策
 ```
@@ -46,18 +48,18 @@ docs/
 - ✅ editor/ 纯 Rust（不依赖 iced）
 - ✅ 返回 Result，不 unwrap
 - ✅ 用 Mermaid 画图（不用 ASCII）
+- ✅ 代码完成后立即更新文档
 - ❌ 不提交未测试的代码
+- ❌ 不主动执行 git commit
 
 ---
 
 ## 快速命令
 
 ```bash
-# 开发
-cargo run              # 启动
-cargo test             # 测试
-
-# 检查
+# 开发工作流
+cargo check
+cargo test
 cargo fmt && cargo clippy
 
 # 详细命令见 docs/tools/cmd.md
@@ -65,4 +67,4 @@ cargo fmt && cargo clippy
 
 ---
 
-**规则在 CLAUDE.md 📋 | 详情在 docs/ 📚 | 随时可查**
+**规则在 CLAUDE.md 📋 | 文档在 docs/ 📚 | 工作流在 cmd.md 🔄**
