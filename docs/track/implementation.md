@@ -169,11 +169,40 @@ docs/track/
 
 ---
 
+## 🎯 开发 Skill
+
+为了完整完成 session 的所有工作，项目提供了 `complete-session` Skill，可以自动化：
+
+1. 读取 Session 目标
+2. 实现代码功能
+3. 编写测试代码
+4. 验证代码正确性
+5. 更新相关文档
+6. 生成提交信息
+
+### 使用方式
+
+在 Claude Code 中说：
+```
+完成当前 session 的任务
+```
+
+### 相关文件
+
+- **Skill 定义**：`.claude/skills/complete-session/SKILL.md`
+- **执行指南**：`.claude/commands/complete-session/COMMAND.md`
+- **规范索引**：`.claude/commands/complete-session/references/README.md`
+
+详见 [Skill 规范文档](../rules/skill.md)
+
+---
+
 ## 📖 查阅资源
 
 - **规范文档**
   - [代码规范](../rules/code.md) - 单元测试规范见此
   - [文档规范](../rules/docs.md) - 文档拆分标准见此
+  - [Skill 规范](../rules/skill.md) - 开发 Skill 的架构和最佳实践
   
 - **设计文档**
   - [架构设计](../intro/arch.md)
