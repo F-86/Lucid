@@ -5,7 +5,7 @@ mod ui;
 
 use crate::editor::buffer::Buffer;
 use crate::markdown::Renderer;
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, text, text_editor};
 use iced::{Element, Length, Task, alignment};
 use std::path::PathBuf;
 use ui::Message;
@@ -14,6 +14,8 @@ use ui::Message;
 #[derive(Default)]
 pub struct App {
     buffer: Buffer,
+    /// 编辑器内容状态
+    editor_content: text_editor::Content,
     /// 缓存的预览 HTML
     preview_html: String,
     /// 当前打开的文件路径
@@ -30,6 +32,15 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::EditInput(content) => {
             app.buffer.set_content(&content);
             // 实时更新预览 HTML
+            app.preview_html = Renderer::render(&content);
+            app.is_modified = true;
+            Task::none()
+        }
+
+        Message::EditorAction(action) => {
+            app.editor_content.perform(action);
+            let content = app.editor_content.text();
+            app.buffer.set_content(&content);
             app.preview_html = Renderer::render(&content);
             app.is_modified = true;
             Task::none()
@@ -105,6 +116,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
 
         Message::FileOpened(Ok((path, content))) => {
             app.buffer.set_content(&content);
+            app.editor_content = text_editor::Content::with_text(&content);
             app.preview_html = Renderer::render(&content);
             let name = path
                 .file_name()
@@ -163,11 +175,18 @@ fn view(app: &App) -> Element<'_, Message> {
     .align_y(alignment::Vertical::Center)
     .padding(5);
 
-    // 编辑器 - 文本输入框
-    let editor = text_input("输入 Markdown...", app.buffer.content())
-        .on_input(Message::EditInput)
-        .padding(10)
-        .width(Length::FillPortion(1));
+    // 编辑器 - 多行文本编辑器
+    let editor = scrollable(
+        container(
+            text_editor(&app.editor_content)
+                .on_action(Message::EditorAction)
+                .padding(10)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+    )
+    .width(Length::FillPortion(1))
+    .height(Length::Fill);
 
     // 预览面板 - 显示 HTML 输出
     let preview_html = Renderer::render(app.buffer.content());
