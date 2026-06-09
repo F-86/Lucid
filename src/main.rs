@@ -6,40 +6,162 @@ mod ui;
 use crate::editor::buffer::Buffer;
 use crate::markdown::Renderer;
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Element, Length};
+use iced::{Element, Length, Task, alignment};
+use std::path::PathBuf;
 use ui::Message;
 
-// 应用状态
+/// 应用状态结构
 #[derive(Default)]
 pub struct App {
     buffer: Buffer,
     /// 缓存的预览 HTML
     preview_html: String,
+    /// 当前打开的文件路径
+    file_path: Option<PathBuf>,
+    /// 是否有未保存修改
+    is_modified: bool,
+    /// 状态栏消息
+    status_message: String,
 }
 
-fn update(app: &mut App, message: Message) {
+/// 处理消息并返回可能的异步任务
+fn update(app: &mut App, message: Message) -> Task<Message> {
     match message {
         Message::EditInput(content) => {
             app.buffer.set_content(&content);
             // 实时更新预览 HTML
             app.preview_html = Renderer::render(&content);
+            app.is_modified = true;
+            Task::none()
         }
+
         Message::FileOpen => {
-            // TODO: 实现文件打开
+            // 打开文件对话框 + 异步读取
+            Task::perform(
+                async {
+                    let handle = rfd::AsyncFileDialog::new()
+                        .add_filter("Markdown", &["md", "txt"])
+                        .add_filter("所有文件", &["*"])
+                        .set_title("打开文件")
+                        .pick_file()
+                        .await;
+
+                    match handle {
+                        None => Err("已取消".to_string()),
+                        Some(h) => {
+                            let path = h.path().to_path_buf();
+                            match editor::file::read_file(&path).await {
+                                Ok(content) => Ok((path, content)),
+                                Err(e) => Err(format!("读取失败：{}", e)),
+                            }
+                        }
+                    }
+                },
+                Message::FileOpened,
+            )
         }
+
         Message::FileSave => {
-            // TODO: 实现文件保存
+            if let Some(path) = &app.file_path {
+                // 已有路径，直接保存
+                let path = path.clone();
+                let content = app.buffer.content().to_string();
+                Task::perform(
+                    async move {
+                        match editor::file::write_file(&path, &content).await {
+                            Ok(()) => Ok(()),
+                            Err(e) => Err(format!("保存失败：{}", e)),
+                        }
+                    },
+                    Message::FileSaved,
+                )
+            } else {
+                // 无路径，弹出另存为对话框
+                let content = app.buffer.content().to_string();
+                Task::perform(
+                    async move {
+                        let handle = rfd::AsyncFileDialog::new()
+                            .add_filter("Markdown", &["md"])
+                            .add_filter("文本文件", &["txt"])
+                            .set_title("保存文件")
+                            .save_file()
+                            .await;
+
+                        match handle {
+                            None => Err("已取消".to_string()),
+                            Some(h) => {
+                                let path = h.path().to_path_buf();
+                                match editor::file::write_file(&path, &content).await {
+                                    Ok(()) => Ok(()),
+                                    Err(e) => Err(format!("保存失败：{}", e)),
+                                }
+                            }
+                        }
+                    },
+                    Message::FileSaved,
+                )
+            }
+        }
+
+        Message::FileOpened(Ok((path, content))) => {
+            app.buffer.set_content(&content);
+            app.preview_html = Renderer::render(&content);
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("未知文件")
+                .to_string();
+            app.file_path = Some(path);
+            app.is_modified = false;
+            app.status_message = format!("✓ 已打开：{name}");
+            Task::none()
+        }
+
+        Message::FileOpened(Err(e)) => {
+            if e != "已取消" {
+                app.status_message = format!("✗ {e}");
+            }
+            Task::none()
+        }
+
+        Message::FileSaved(Ok(())) => {
+            app.is_modified = false;
+            app.status_message = "✓ 已保存".to_string();
+            Task::none()
+        }
+
+        Message::FileSaved(Err(e)) => {
+            if e != "已取消" {
+                app.status_message = format!("✗ {e}");
+            }
+            Task::none()
         }
     }
 }
 
+/// 构建 UI
 fn view(app: &App) -> Element<'_, Message> {
+    // 文件状态显示
+    let file_name = app
+        .file_path
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("未命名");
+    let modified_indicator = if app.is_modified { " *" } else { "" };
+
+    let file_status = text(format!("{file_name}{modified_indicator}")).size(13);
+
     // 工具栏
     let toolbar = row![
-        button("📁 Open").on_press(Message::FileOpen).padding(10),
-        button("💾 Save").on_press(Message::FileSave).padding(10),
+        button("📁 打开").on_press(Message::FileOpen).padding(10),
+        button("💾 保存").on_press(Message::FileSave).padding(10),
+        text(" "),
+        file_status,
     ]
-    .spacing(10);
+    .spacing(10)
+    .align_y(alignment::Vertical::Center)
+    .padding(5);
 
     // 编辑器 - 文本输入框
     let editor = text_input("输入 Markdown...", app.buffer.content())
@@ -47,10 +169,8 @@ fn view(app: &App) -> Element<'_, Message> {
         .padding(10)
         .width(Length::FillPortion(1));
 
-    // 预览面板 - 使用 HTML 渲染（未来支持）
-    // 当前 iced 不原生支持 HTML，所以显示原始 HTML 标签帮助用户理解
+    // 预览面板 - 显示 HTML 输出
     let preview_html = Renderer::render(app.buffer.content());
-    // 限制显示长度，避免过长的 HTML 被截断
     let display_text = if preview_html.is_empty() {
         "预览将在此显示".to_string()
     } else {
@@ -66,8 +186,11 @@ fn view(app: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill);
 
+    // 状态栏
+    let status_bar = text(&app.status_message).size(12);
+
     // 组装应用
-    let app_layout = column![toolbar, content]
+    let app_layout = column![toolbar, content, status_bar]
         .spacing(10)
         .padding(10)
         .width(Length::Fill)
@@ -79,6 +202,27 @@ fn view(app: &App) -> Element<'_, Message> {
         .into()
 }
 
+/// 生成动态窗口标题
+fn window_title(app: &App) -> String {
+    let modified = if app.is_modified { "* " } else { "" };
+    match &app.file_path {
+        Some(p) => format!(
+            "{}{} — Lucid",
+            modified,
+            p.file_name().and_then(|n| n.to_str()).unwrap_or("文件")
+        ),
+        None => format!("{modified}未命名 — Lucid"),
+    }
+}
+
+/// 应用启动函数 - 返回初始状态和可选的初始任务
+fn boot() -> (App, Task<Message>) {
+    (App::default(), Task::none())
+}
+
+/// 应用入口
 pub fn main() -> iced::Result {
-    iced::run(update, view)
+    iced::application(boot, update, view)
+        .title(window_title)
+        .run()
 }
