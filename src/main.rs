@@ -27,6 +27,10 @@ pub struct App {
     status_message: String,
     /// 撤销/重做历史栈
     history: History,
+    /// 撤销按钮是否启用
+    can_undo: bool,
+    /// 重做按钮是否启用
+    can_redo: bool,
 }
 
 /// 处理消息并返回可能的异步任务
@@ -39,6 +43,9 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             app.is_modified = true;
             // 记录编辑历史
             app.history.push(content);
+            // 更新按钮状态
+            app.can_undo = app.history.can_undo();
+            app.can_redo = app.history.can_redo();
             Task::none()
         }
 
@@ -50,6 +57,9 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             app.is_modified = true;
             // 记录编辑历史
             app.history.push(content.to_string());
+            // 更新按钮状态
+            app.can_undo = app.history.can_undo();
+            app.can_redo = app.history.can_redo();
             Task::none()
         }
 
@@ -133,6 +143,9 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             app.file_path = Some(path);
             app.is_modified = false;
             app.status_message = format!("✓ 已打开：{name}");
+            // 更新按钮状态
+            app.can_undo = app.history.can_undo();
+            app.can_redo = app.history.can_redo();
             Task::none()
         }
 
@@ -164,6 +177,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.preview_html = Renderer::render(&previous);
                 app.is_modified = true;
                 app.status_message = "↶ 已撤销".to_string();
+                app.can_undo = app.history.can_undo();
+                app.can_redo = app.history.can_redo();
             } else {
                 app.status_message = "⚠ 没有可撤销的操作".to_string();
             }
@@ -178,6 +193,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.preview_html = Renderer::render(&next);
                 app.is_modified = true;
                 app.status_message = "↷ 已重做".to_string();
+                app.can_undo = app.history.can_undo();
+                app.can_redo = app.history.can_redo();
             } else {
                 app.status_message = "⚠ 没有可重做的操作".to_string();
             }
@@ -200,11 +217,31 @@ fn view(app: &App) -> Element<'_, Message> {
     let file_status = text(format!("{file_name}{modified_indicator}")).size(13);
 
     // 工具栏
+    let undo_button = if app.can_undo {
+        button("↶ 撤销 (Ctrl+Z)")
+            .on_press(Message::Undo)
+            .padding(10)
+    } else {
+        button("↶ 撤销").padding(10)
+    };
+
+    let redo_button = if app.can_redo {
+        button("↷ 重做 (Ctrl+Y)")
+            .on_press(Message::Redo)
+            .padding(10)
+    } else {
+        button("↷ 重做").padding(10)
+    };
+
     let toolbar = row![
-        button("📁 打开").on_press(Message::FileOpen).padding(10),
-        button("💾 保存").on_press(Message::FileSave).padding(10),
-        button("↶ 撤销").on_press(Message::Undo).padding(10),
-        button("↷ 重做").on_press(Message::Redo).padding(10),
+        button("📁 打开 (Ctrl+O)")
+            .on_press(Message::FileOpen)
+            .padding(10),
+        button("💾 保存 (Ctrl+S)")
+            .on_press(Message::FileSave)
+            .padding(10),
+        undo_button,
+        redo_button,
         text(" "),
         file_status,
     ]
