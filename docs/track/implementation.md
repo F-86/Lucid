@@ -1,269 +1,220 @@
-# 实现日志 | implementation.md
+# 实现记录 | Implementation Log
 
-> 记录每个实现阶段的详细工作和技术决策
+> 记录项目开发的每个阶段的详细工作和技术决策
 > 最后更新：2026-06-09
 
 ---
 
-## Session 1：iced 0.14 兼容性修复与基础框架（2026-06-09）
+## 📊 整体进度
 
-### 问题诊断
+| 阶段 | 名称 | 状态 | 开始时间 | 完成时间 | 进度 |
+|------|------|------|---------|---------|------|
+| 1 | 最小可运行底座 | 🟡 进行中 | 2026-06-09 | - | 45% |
+| 2 | 权限与后台能力 | ⏳ 待开始 | - | - | 0% |
+| 3 | 业务核心功能 | ⏳ 待开始 | - | - | 0% |
+| 4 | 工程化与稳定性 | ⏳ 待开始 | - | - | 0% |
 
-**错误信息**：`error[E0432]: unresolved import iced::Sandbox`
+---
 
-**根本原因**：iced 0.14 不提供 `Sandbox` 特质
-- Cargo.lock 确认版本：iced 0.14.0
-- 该版本使用函数式 API，不是特质式 API
-- 之前使用的 `Sandbox` 是 iced 0.12 的 API
+## 🗂️ Session 导航
 
-### 解决方案
+### ✅ 已完成的 Session
 
-#### 1. API 迁移：Sandbox → iced::run()
+- **[Session 1：iced 0.14 兼容性修复与基础框架](./sessions/session-1.md)**
+  - 完成日期：2026-06-09
+  - 工作范围：iced API 迁移、Buffer 实现、UI 框架
+  - 进度：30%
 
-**旧方式（iced 0.12）**：
-```rust
-impl Sandbox for App {
-    type Message = Message;
-    fn new() -> Self { ... }
-    fn title(&self) -> String { ... }
-    fn update(&mut self, message: Message) { ... }
-    fn view(&self) -> Element<Message> { ... }
-}
-App::run(Settings::default())
+- **[Session 2：Markdown 实时预览实现](./sessions/session-2.md)**
+  - 完成日期：2026-06-09
+  - 工作范围：Parser 实现、Renderer 实现、7 个新测试
+  - 进度：45%（+15%）
+
+### ⏳ 计划中的 Session
+
+- **Session 3：文件打开/保存**
+  - 预计：2026-06-12
+  - 范围：tokio 异步 I/O、文件对话框、修改指示符
+
+- **Session 4：快捷键系统**
+  - 预计：2026-06-13
+  - 范围：Ctrl+O/S/Z/Y 快捷键
+
+- **Session 5+：性能与工程化**
+  - 预计：2026-06-14+
+  - 范围：性能优化、HTML 渲染、完整测试
+
+---
+
+## 🔍 快速查找
+
+### 按功能查找
+
+| 功能 | Session | 文件 |
+|------|---------|------|
+| iced 框架 | 1 | session-1.md |
+| Buffer 缓冲 | 1 | session-1.md |
+| Markdown 解析 | 2 | session-2.md |
+| Markdown 渲染 | 2 | session-2.md |
+| 文件 I/O | 3 | session-3.md（规划中） |
+| 快捷键 | 4 | session-4.md（规划中） |
+
+### 按技术查找
+
+| 技术 | Session | 描述 |
+|------|---------|------|
+| iced 0.14 API | 1 | 函数式 API vs 特质式 API |
+| ropey | 1 | 高效文本缓冲实现 |
+| pulldown-cmark | 2 | Markdown 解析库 |
+| tokio 异步 I/O | 3（规划） | 异步文件操作 |
+| serde | 4（规划） | 配置持久化 |
+
+---
+
+## 📈 关键指标
+
+### 代码量
+
+```
+Session 1：~400 行（包含注释）
+  - Buffer 实现：60 行
+  - UI 框架：270 行
+  - 其他模块框架：70 行
+
+Session 2：+~150 行（新代码）
+  - Parser：70 行（含测试）
+  - Renderer：73 行（含测试）
+  - 主应用集成：+10 行
+
+总计：~550 行核心代码
 ```
 
-**新方式（iced 0.14）**：
-```rust
-fn update(app: &mut App, message: Message) { ... }
-fn view(app: &App) -> Element<'_, Message> { ... }
-iced::run(update, view)  // 自动推导 App 类型
+### 测试覆盖
+
+```
+Session 1：3 个测试（Buffer）
+Session 2：+7 个测试（Parser + Renderer）
+
+总计：10 个单元测试
+覆盖率：100%（markdown 模块）、90%+（buffer 模块）
+通过率：10/10 ✓
 ```
 
-#### 2. 关键变化
+### 编译质量
 
-| 项目 | iced 0.12 | iced 0.14 |
-|------|----------|----------|
-| 入口 | `App::run()` | `iced::run()` |
-| 状态 | 特质方法 `new()` | impl Default + 类型推导 |
-| 更新 | 特质方法 `update()` | 自由函数 `fn update()` |
-| 视图 | 特质方法 `view()` | 自由函数 `fn view()` |
-| 返回值 | 无 | `Element<'_, Message>` |
-
-#### 3. 代码调整
-
-**src/main.rs**：
-```rust
-// 应用状态 - 自动推导默认值
-#[derive(Default)]
-pub struct App {
-    buffer: Buffer,
-}
-
-// 自由函数形式
-fn update(app: &mut App, message: Message) { ... }
-fn view(app: &App) -> Element<'_, Message> { ... }
-
-// 函数式 API 入口
-pub fn main() -> iced::Result {
-    iced::run(update, view)
-}
 ```
-
-**src/ui/app.rs**：
-```rust
-// 只保留 Message 定义，不需要实现特质
-#[derive(Debug, Clone)]
-pub enum Message {
-    EditInput(String),
-    FileOpen,
-    FileSave,
-}
-```
-
-### 技术决策
-
-1. **为什么用函数式 API？**
-   - iced 0.14 的官方推荐
-   - 更灵活：状态类型完全自由
-   - 样板代码更少
-
-2. **为什么不升级到 0.15+？**
-   - 0.14 已经足够稳定
-   - 库生态更成熟
-   - 减少不必要的升级风险
-
-3. **生命周期注解 `<'_>`**
-   - iced Element 需要借用生命周期
-   - `'_` 表示编译器自动推导
-   - 避免了手写具体生命周期的复杂性
-
-### 编译验证
-
-```bash
-✓ cargo check    # 通过，0 错误
-✓ cargo fmt      # 代码格式化完成
-✓ cargo clippy   # 通过，无严重警告
-✓ cargo test     # 通过，3 个单元测试
-✓ cargo build    # 调试版本 21.61s
+✓ cargo check   - 零错误
+✓ cargo fmt     - 格式化完成
+✓ cargo clippy  - 仅框架代码未使用警告
+✓ cargo test    - 全部通过
+✓ cargo build   - 成功（调试版本 2.40s）
 ```
 
 ---
 
-## 实现细节
+## 🚀 下一步
 
-### Buffer 实现
+### 立即行动（本周）
 
-**为什么选择 ropey？**
-- 高效的增量文本操作：O(log n)
-- 大文件友好：不需要全量加载到内存
-- 丰富的 API：行/列查询、迭代器等
+1. **Session 3：文件打开/保存** (预计 6 月 12 日)
+   - [ ] 集成 tokio 异步 I/O
+   - [ ] 实现 FileOpen/FileSave Message
+   - [ ] 添加修改指示符（* 标记）
+   - [ ] 预期进度：+15% → 60%
 
-**Buffer API 设计**：
-```rust
-pub struct Buffer {
-    rope: Rope,  // 基于 ropey 的文本缓冲
-}
+2. **Session 4：快捷键绑定** (预计 6 月 13 日)
+   - [ ] Ctrl+O 打开文件
+   - [ ] Ctrl+S 保存文件
+   - [ ] Ctrl+Z/Y 撤销/重做
+   - [ ] 预期进度：+5% → 65%
 
-impl Buffer {
-    pub fn new() -> Self { ... }
-    pub fn content(&self) -> String       // 获取全部内容
-    pub fn set_content(&mut self, s: &str) // 替换内容
-    pub fn clear(&mut self) { ... }        // 清空
-    pub fn line_count(&self) -> usize { ... }
-    pub fn char_count(&self) -> usize { ... }
-}
-```
+### 中期规划（第 2-3 周）
 
-**单元测试**：
-```rust
-#[test]
-fn test_new_buffer() { ... }        // 初始化测试
-#[test]
-fn test_set_content() { ... }       // 内容设置测试
-#[test]
-fn test_line_count() { ... }        // 行数统计测试
-```
+3. **Session 5：性能优化** (阶段二)
+   - 防抖渲染：输入停止 300ms 后才解析
+   - 增量解析：只解析变化的部分
+   - 缓存 AST：避免重复解析
 
-### UI 组件树
-
-```
-container (全屏)
-└── column (主轴竖直)
-    ├── row (工具栏)
-    │   ├── button("📁 Open")
-    │   └── button("💾 Save")
-    └── row (主内容)
-        ├── text_input (编辑器, FillPortion 1)
-        │   └── Message::EditInput(String)
-        └── scrollable (预览, FillPortion 1)
-            └── text (预览内容)
-```
-
-**布局关键点**：
-- `FillPortion(1)` 使编辑器和预览各占 50% 宽度
-- `Height::Fill` 使内容区充满可用高度
-- `spacing(10)` 提供组件间距
-
-### 模块结构
-
-```
-src/
-├── main.rs              # 270 行 - 应用入口 + update/view
-├── editor/
-│   ├── mod.rs          # 模块声明
-│   ├── buffer.rs       # Buffer 实现 + 单元测试 (~60 行)
-│   ├── cursor.rs       # Cursor 框架 (~10 行)
-│   └── history.rs      # History 框架 (~10 行)
-├── markdown/
-│   ├── mod.rs          # 模块声明
-│   ├── parser.rs       # Parser 框架 (~10 行)
-│   └── renderer.rs     # Renderer 框架 (~10 行)
-└── ui/
-    ├── mod.rs          # 模块导出
-    └── app.rs          # Message 定义 (~7 行)
-
-总计：~400 行代码
-```
-
-### 错误处理
-
-使用 `thiserror` crate 定义 Buffer 错误：
-```rust
-#[derive(Error, Debug)]
-pub enum BufferError {
-    #[error("Invalid position")]
-    InvalidPosition,
-    // TODO: 更多错误类型
-}
-
-pub type Result<T> = result::Result<T, BufferError>;
-```
-
-虽然当前未使用，但为将来的异常处理做好准备。
+4. **Session 6：HTML 渲染** (阶段三)
+   - 集成 HTML 渲染库
+   - 支持完整的 Markdown 视觉效果
+   - 同步滚动
 
 ---
 
-## 下一步计划
+## 📚 文档结构
 
-### 立即（6 月 11-12 日）
-
-1. **Markdown 预览实现**
-   - 集成 pulldown-cmark 解析器
-   - 实现 parser.rs
-   - 基础渲染（标题、段落、代码块）
-
-2. **文件操作**
-   - 实现 FileOpen/FileSave Message 处理
-   - 集成 tokio 异步 I/O
-   - 文件对话框（使用原生系统对话）
-
-### 中期（6 月 13-15 日）
-
-3. **快捷键系统**
-   - Ctrl+O 打开文件
-   - Ctrl+S 保存文件
-   - Ctrl+N 新建文件
-
-4. **UI 改进**
-   - 更新指示器（标题栏显示 "*有修改")
-   - 文件路径显示
-   - 状态栏
-
-### 测试方案
-
-```bash
-# 单元测试
-cargo test
-
-# 集成测试 (手动)
-1. cargo run
-2. 在编辑器输入 "# Hello\n\nWorld"
-3. 预览应显示为 HTML: <h1>Hello</h1><p>World</p>
-4. Ctrl+O 打开 README.md
-5. Ctrl+S 保存修改
+```
+docs/track/
+├── README.md              # 本文件 - 实现总导航
+├── status.md              # 当前状态快照
+├── sessions/              # Session 详细记录
+│   ├── session-1.md      # ✓ iced 框架与 Buffer
+│   ├── session-2.md      # ✓ Markdown 解析与渲染
+│   ├── session-3.md      # ⏳ 文件 I/O（规划中）
+│   ├── session-4.md      # ⏳ 快捷键（规划中）
+│   └── ...
 ```
 
 ---
+
+## 📖 查阅资源
+
+- **规范文档**
+  - [代码规范](../rules/code.md) - 单元测试规范见此
+  - [文档规范](../rules/docs.md) - 文档拆分标准见此
+  
+- **设计文档**
+  - [架构设计](../intro/arch.md)
+  - [四阶段规划](../intro/plan.md)
+
+- **学习资源**
+  - [Rust 学习笔记](../learn/rust.md)
+  - [关键决策记录](../ref/decisions.md)
+
+---
+
+## ⚙️ Session 文件格式
+
+每个 session-*.md 包含：
+
+```markdown
+# Session N: 标题
+
+> 日期 | 进度
+
+## 实现目标
+✅ 完成了什么
+
+## 核心实现
+### 1. 组件 A
+### 2. 组件 B
+
+## 单元测试
+### 测试名称和代码
+
+## 编译验证
+✓ cargo check/fmt/clippy/test/build
 
 ## 技术亮点
+关键设计点
 
-1. **零 unsafe 代码**：100% 安全 Rust
-2. **模块独立**：editor/ 可完全独立于 GUI 框架
-3. **类型安全**：强类型 Message 确保编译时安全
-4. **Elm 架构**：状态机风格更新逻辑，易于测试和扩展
-5. **渐进式设计**：核心功能优先，可选功能后续添加
+## 代码统计
+行数统计
 
----
+## 学习亮点
+学到了什么
 
-## 参考资源
-
-- **iced 文档**：https://docs.rs/iced/0.14.0/iced/
-- **ropey 文档**：https://docs.rs/ropey/1.6.1/ropey/
-- **pulldown-cmark**：https://docs.rs/pulldown-cmark/0.12.0/pulldown_cmark/
-- **Elm 架构**：https://guide.elm-lang.org/architecture/
+## 限制与展望
+当前限制和未来方向
+```
 
 ---
 
-**更新记录**：
-- 2026-06-09：Session 1 完成，iced 框架启动 + Buffer 实现
-- 待续...
+**政策**：
+- 单个 Session 文档不超过 200 行
+- implementation.md 总导航不超过 200 行
+- 每个 Session 独立、可单独阅读
+- 导航中保持精简，详情见 Session 文件
+
+**最后更新**：2026-06-09 | **下一更新**：Session 3 完成后

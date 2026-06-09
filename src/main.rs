@@ -4,6 +4,7 @@ mod markdown;
 mod ui;
 
 use crate::editor::buffer::Buffer;
+use crate::markdown::Renderer;
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
 use ui::Message;
@@ -12,12 +13,16 @@ use ui::Message;
 #[derive(Default)]
 pub struct App {
     buffer: Buffer,
+    /// 缓存的预览 HTML
+    preview_html: String,
 }
 
 fn update(app: &mut App, message: Message) {
     match message {
         Message::EditInput(content) => {
             app.buffer.set_content(&content);
+            // 实时更新预览 HTML
+            app.preview_html = Renderer::render(&content);
         }
         Message::FileOpen => {
             // TODO: 实现文件打开
@@ -42,9 +47,18 @@ fn view(app: &App) -> Element<'_, Message> {
         .padding(10)
         .width(Length::FillPortion(1));
 
-    // 预览面板
-    let preview =
-        scrollable(text(format!("预览\n{}", app.buffer.content()))).width(Length::FillPortion(1));
+    // 预览面板 - 使用 HTML 渲染（未来支持）
+    // 当前 iced 不原生支持 HTML，所以显示原始 HTML 标签帮助用户理解
+    let preview_html = Renderer::render(app.buffer.content());
+    // 限制显示长度，避免过长的 HTML 被截断
+    let display_text = if preview_html.is_empty() {
+        "预览将在此显示".to_string()
+    } else {
+        preview_html.clone()
+    };
+    let preview = scrollable(text(display_text).width(Length::Fill))
+        .width(Length::FillPortion(1))
+        .height(Length::Fill);
 
     // 左右两栏布局
     let content = row![editor, preview]

@@ -33,10 +33,22 @@ pub fn do_something(x: &str) -> Result<String, MyError> {
 - [ ] 模块内清晰的职责分工
 - [ ] 无循环依赖
 
-### 测试
-- [ ] 写单元测试（`#[cfg(test)]`）
-- [ ] 至少测试成功和失败路径
-- [ ] 测试注释说明意图
+### 错误处理
+- [ ] 业务逻辑中返回 Result，不 panic/unwrap
+- [ ] 使用自定义 Error 类型（thiserror）
+- [ ] 错误消息清晰明确
+
+```rust
+// ✅ 好
+pub fn parse(input: &str) -> Result<Config, ParseError> {
+    // ...
+}
+
+// ❌ 不好
+pub fn parse(input: &str) -> Config {
+    serde_json::from_str(input).unwrap()  // 会 panic！
+}
+```
 
 ---
 
@@ -46,11 +58,33 @@ pub fn do_something(x: &str) -> Result<String, MyError> {
 - ❌ 编译后有 clippy 警告
 - ❌ editor/ 导入 iced 相关
 - ❌ public 函数没有生命周期标注
+- ❌ 提交代码前不运行 cargo test
 
 ---
 
 ## 提交前检查
 
 ```bash
-cargo fmt && cargo clippy && cargo test
+# 1. 代码格式
+cargo fmt
+
+# 2. 代码质量
+cargo clippy
+
+# 3. 单元测试（见 testing.md）
+cargo test
+
+# 4. 完整编译
+cargo build
 ```
+
+**都通过后才能提交！**
+
+---
+
+## 参考
+
+- **测试规范** → `testing.md`
+- **文档规范** → `docs.md`
+
+
