@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.14", features = ["tokio"] }
+gpui = "0.2"
 ropey = "1.6"
 pulldown-cmark = "0.12"
 thiserror = "2"

@@ -1,4 +1,6 @@
-// Lucid - Typora 风格的 Markdown 编辑器
+// Lucid - GPUI 版本
+// 基于 GPUI 0.2.2 构建的 Typora 风格 Markdown 编辑器
+
 mod editor;
 mod markdown;
 mod ui;
@@ -6,450 +8,361 @@ mod ui;
 use crate::editor::buffer::Buffer;
 use crate::editor::history::History;
 use crate::markdown::Renderer;
-use iced::keyboard;
-use iced::widget::{button, column, container, row, scrollable, text, text_editor};
-use iced::{Element, Length, Subscription, Task, alignment};
+use crate::ui::{OpenFile, SaveFile, Undo, Redo};
+use gpui::prelude::*;
+use gpui::{
+    Application, Context, div, FocusHandle, KeyDownEvent, KeyBinding,
+    MouseButton, Render, rgb, ViewContext, Window, WindowOptions,
+};
 use std::path::PathBuf;
-use ui::Message;
 
-/// 应用状态结构
-#[derive(Default)]
-pub struct App {
+/// 应用主状态结构体
+/// 替代原 iced 的 App struct，GPUI 风格：状态与渲染分离
+pub struct LucidApp {
+    // 编辑器核心模块（纯 Rust）
     buffer: Buffer,
-    /// 编辑器内容状态
-    editor_content: text_editor::Content,
-    /// 缓存的预览 HTML
-    preview_html: String,
-    /// 当前打开的文件路径
-    file_path: Option<PathBuf>,
-    /// 是否有未保存修改
-    is_modified: bool,
-    /// 状态栏消息
-    status_message: String,
-    /// 撤销/重做历史栈
     history: History,
-    /// 撤销按钮是否启用
+    // UI 状态
+    content: String,
+    preview_html: String,
+    file_path: Option<PathBuf>,
+    is_modified: bool,
+    status_message: String,
     can_undo: bool,
-    /// 重做按钮是否启用
     can_redo: bool,
+    // GPUI 特有：焦点管理（替代 iced 的 text_editor::Content）
+    focus_handle: FocusHandle,
 }
 
-/// 处理消息并返回可能的异步任务
-fn update(app: &mut App, message: Message) -> Task<Message> {
-    match message {
-        Message::EditInput(content) => {
-            app.buffer.set_content(&content);
-            // 实时更新预览 HTML
-            app.preview_html = Renderer::render(&content);
-            app.is_modified = true;
-            // 记录编辑历史
-            app.history.push(content);
-            // 更新按钮状态
-            app.can_undo = app.history.can_undo();
-            app.can_redo = app.history.can_redo();
-            Task::none()
+impl LucidApp {
+    /// 初始化应用状态
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            buffer: Buffer::new(),
+            history: History::new(),
+            content: String::new(),
+            preview_html: String::new(),
+            file_path: None,
+            is_modified: false,
+            status_message: String::new(),
+            can_undo: false,
+            can_redo: false,
+            focus_handle: cx.focus_handle(),
         }
+    }
 
-        Message::EditorAction(action) => {
-            app.editor_content.perform(action);
-            let content = app.editor_content.text();
-            app.buffer.set_content(&content);
-            app.preview_html = Renderer::render(&content);
-            app.is_modified = true;
-            // 记录编辑历史
-            app.history.push(content.to_string());
-            // 更新按钮状态
-            app.can_undo = app.history.can_undo();
-            app.can_redo = app.history.can_redo();
-            Task::none()
-        }
+    /// 将内容同步到各个子模块，更新预览和历史
+    fn sync_content(&mut self, cx: &mut Context<Self>) {
+        let c = self.content.clone();
+        self.buffer.set_content(&c);
+        self.preview_html = Renderer::render(&c);
+        self.is_modified = true;
+        self.history.push(c);
+        self.can_undo = self.history.can_undo();
+        self.can_redo = self.history.can_redo();
+        cx.notify();
+    }
 
-        Message::FileOpen => {
-            // 打开文件对话框 + 异步读取
-            Task::perform(
-                async {
-                    let handle = rfd::AsyncFileDialog::new()
-                        .add_filter("Markdown", &["md", "txt"])
-                        .add_filter("所有文件", &["*"])
-                        .set_title("打开文件")
-                        .pick_file()
-                        .await;
+    /// 处理 OpenFile Action
+    fn handle_open_file(&mut self, _: &OpenFile, _win: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn(|handle, mut cx| async move {
+            let picked = rfd::AsyncFileDialog::new()
+                .add_filter("Markdown", &["md", "txt"])
+                .set_title("打开文件")
+                .pick_file()
+                .await;
 
-                    match handle {
-                        None => Err("已取消".to_string()),
-                        Some(h) => {
-                            let path = h.path().to_path_buf();
-                            match editor::file::read_file(&path).await {
-                                Ok(content) => Ok((path, content)),
-                                Err(e) => Err(format!("读取失败：{}", e)),
-                            }
-                        }
+            if let Some(h) = picked {
+                let path = h.path().to_path_buf();
+                match editor::file::read_file(&path).await {
+                    Ok(content) => {
+                        handle.update(&mut cx, |this, cx| {
+                            this.buffer.set_content(&content);
+                            this.preview_html = Renderer::render(&content);
+                            this.content = content;
+                            this.file_path = Some(path.clone());
+                            this.is_modified = false;
+                            this.history.clear();
+                            this.can_undo = false;
+                            this.can_redo = false;
+                            let name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("未知文件")
+                                .to_string();
+                            this.status_message = format!("✓ 已打开：{name}");
+                            cx.notify();
+                        }).ok();
                     }
-                },
-                Message::FileOpened,
+                    Err(e) => {
+                        handle.update(&mut cx, |this, cx| {
+                            this.status_message = format!("✗ 打开失败：{e}");
+                            cx.notify();
+                        }).ok();
+                    }
+                }
+            }
+        }).detach();
+    }
+
+    /// 处理 SaveFile Action
+    fn handle_save_file(&mut self, _: &SaveFile, _win: &mut Window, cx: &mut Context<Self>) {
+        let path = self.file_path.clone();
+        let content = self.content.clone();
+        cx.spawn(|handle, mut cx| async move {
+            let save_path = match path {
+                Some(p) => Some(p),
+                None => rfd::AsyncFileDialog::new()
+                    .add_filter("Markdown", &["md"])
+                    .add_filter("文本文件", &["txt"])
+                    .set_title("保存文件")
+                    .save_file()
+                    .await
+                    .map(|h| h.path().to_path_buf()),
+            };
+
+            if let Some(p) = save_path {
+                match editor::file::write_file(&p, &content).await {
+                    Ok(()) => {
+                        handle.update(&mut cx, |this, cx| {
+                            this.file_path = Some(p);
+                            this.is_modified = false;
+                            this.status_message = "✓ 已保存".to_string();
+                            cx.notify();
+                        }).ok();
+                    }
+                    Err(e) => {
+                        handle.update(&mut cx, |this, cx| {
+                            this.status_message = format!("✗ 保存失败：{e}");
+                            cx.notify();
+                        }).ok();
+                    }
+                }
+            }
+        }).detach();
+    }
+
+    /// 处理 Undo Action
+    fn handle_undo(&mut self, _: &Undo, _win: &mut Window, cx: &mut Context<Self>) {
+        if let Some(prev) = self.history.undo() {
+            self.buffer.set_content(&prev);
+            self.preview_html = Renderer::render(&prev);
+            self.content = prev;
+            self.is_modified = true;
+            self.can_undo = self.history.can_undo();
+            self.can_redo = self.history.can_redo();
+            self.status_message = "↶ 已撤销".to_string();
+            cx.notify();
+        } else {
+            self.status_message = "⚠ 没有可撤销的操作".to_string();
+            cx.notify();
+        }
+    }
+
+    /// 处理 Redo Action
+    fn handle_redo(&mut self, _: &Redo, _win: &mut Window, cx: &mut Context<Self>) {
+        if let Some(next) = self.history.redo() {
+            self.buffer.set_content(&next);
+            self.preview_html = Renderer::render(&next);
+            self.content = next;
+            self.is_modified = true;
+            self.can_undo = self.history.can_undo();
+            self.can_redo = self.history.can_redo();
+            self.status_message = "↷ 已重做".to_string();
+            cx.notify();
+        } else {
+            self.status_message = "⚠ 没有可重做的操作".to_string();
+            cx.notify();
+        }
+    }
+
+    /// 渲染工具栏
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .gap_3()
+            .p_3()
+            .bg(rgb(0x282838))
+            .border_b_1()
+            .border_color(rgb(0x45475a))
+            // 打开按钮
+            .child(
+                div()
+                    .px_4().py_2()
+                    .rounded("md")
+                    .bg(rgb(0x4a9eff))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|_, _evt, _win, _cx| {}))
+                    .on_action(cx.listener(Self::handle_open_file))
+                    .child("📁 打开 (⌘O)")
             )
-        }
+            // 保存按钮
+            .child(
+                div()
+                    .px_4().py_2()
+                    .rounded("md")
+                    .bg(rgb(0x4a9eff))
+                    .cursor_pointer()
+                    .on_action(cx.listener(Self::handle_save_file))
+                    .child("💾 保存 (⌘S)")
+            )
+            // 撤销按钮
+            .child({
+                let bg = if self.can_undo { rgb(0x4a9eff) } else { rgb(0x45475a) };
+                div()
+                    .px_4().py_2()
+                    .rounded("md")
+                    .bg(bg)
+                    .when(self.can_undo, |v| v.cursor_pointer())
+                    .when(self.can_undo, |v| v.on_action(cx.listener(Self::handle_undo)))
+                    .child("↶ 撤销 (⌘Z)")
+            })
+            // 重做按钮
+            .child({
+                let bg = if self.can_redo { rgb(0x4a9eff) } else { rgb(0x45475a) };
+                div()
+                    .px_4().py_2()
+                    .rounded("md")
+                    .bg(bg)
+                    .when(self.can_redo, |v| v.cursor_pointer())
+                    .when(self.can_redo, |v| v.on_action(cx.listener(Self::handle_redo)))
+                    .child("↷ 重做 (⌘⇧Z)")
+            })
+    }
 
-        Message::FileSave => {
-            if let Some(path) = &app.file_path {
-                // 已有路径，直接保存
-                let path = path.clone();
-                let content = app.buffer.content().to_string();
-                Task::perform(
-                    async move {
-                        match editor::file::write_file(&path, &content).await {
-                            Ok(()) => Ok(()),
-                            Err(e) => Err(format!("保存失败：{}", e)),
+    /// 渲染编辑区（左栏）
+    fn render_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex_1()
+            .h_full()
+            .bg(rgb(0x282838))
+            .p_4()
+            .track_focus(&self.focus_handle)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _evt, win, _cx| {
+                this.focus_handle.focus(win); // 鼠标点击获取焦点
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _win, cx| {
+                // Command 组合键由 Actions 系统处理，此处跳过
+                if event.keystroke.modifiers.command {
+                    return;
+                }
+
+                let key = &event.keystroke.key;
+                match key.as_str() {
+                    "backspace" => {
+                        this.content.pop();
+                        this.sync_content(cx);
+                    }
+                    "enter" => {
+                        this.content.push('\n');
+                        this.sync_content(cx);
+                    }
+                    _ if key.chars().count() == 1 => {
+                        if let Some(c) = key.chars().next() {
+                            this.content.push(c);
+                            this.sync_content(cx);
                         }
-                    },
-                    Message::FileSaved,
-                )
-            } else {
-                // 无路径，弹出另存为对话框
-                let content = app.buffer.content().to_string();
-                Task::perform(
-                    async move {
-                        let handle = rfd::AsyncFileDialog::new()
-                            .add_filter("Markdown", &["md"])
-                            .add_filter("文本文件", &["txt"])
-                            .set_title("保存文件")
-                            .save_file()
-                            .await;
-
-                        match handle {
-                            None => Err("已取消".to_string()),
-                            Some(h) => {
-                                let path = h.path().to_path_buf();
-                                match editor::file::write_file(&path, &content).await {
-                                    Ok(()) => Ok(()),
-                                    Err(e) => Err(format!("保存失败：{}", e)),
-                                }
-                            }
-                        }
-                    },
-                    Message::FileSaved,
-                )
-            }
-        }
-
-        Message::FileOpened(Ok((path, content))) => {
-            app.buffer.set_content(&content);
-            app.editor_content = text_editor::Content::with_text(&content);
-            app.preview_html = Renderer::render(&content);
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("未知文件")
-                .to_string();
-            app.file_path = Some(path);
-            app.is_modified = false;
-            app.status_message = format!("✓ 已打开：{name}");
-            // 更新按钮状态
-            app.can_undo = app.history.can_undo();
-            app.can_redo = app.history.can_redo();
-            Task::none()
-        }
-
-        Message::FileOpened(Err(e)) => {
-            if e != "已取消" {
-                app.status_message = format!("✗ {e}");
-            }
-            Task::none()
-        }
-
-        Message::FileSaved(Ok(())) => {
-            app.is_modified = false;
-            app.status_message = "✓ 已保存".to_string();
-            Task::none()
-        }
-
-        Message::FileSaved(Err(e)) => {
-            if e != "已取消" {
-                app.status_message = format!("✗ {e}");
-            }
-            Task::none()
-        }
-
-        Message::Undo => {
-            // 撤销：从撤销栈弹出前一个状态
-            if let Some(previous) = app.history.undo() {
-                app.editor_content = text_editor::Content::with_text(&previous);
-                app.buffer.set_content(&previous);
-                app.preview_html = Renderer::render(&previous);
-                app.is_modified = true;
-                app.status_message = "↶ 已撤销".to_string();
-                app.can_undo = app.history.can_undo();
-                app.can_redo = app.history.can_redo();
-            } else {
-                app.status_message = "⚠ 没有可撤销的操作".to_string();
-            }
-            Task::none()
-        }
-
-        Message::Redo => {
-            // 重做：从重做栈弹出下一个状态
-            if let Some(next) = app.history.redo() {
-                app.editor_content = text_editor::Content::with_text(&next);
-                app.buffer.set_content(&next);
-                app.preview_html = Renderer::render(&next);
-                app.is_modified = true;
-                app.status_message = "↷ 已重做".to_string();
-                app.can_undo = app.history.can_undo();
-                app.can_redo = app.history.can_redo();
-            } else {
-                app.status_message = "⚠ 没有可重做的操作".to_string();
-            }
-            Task::none()
-        }
-
-        Message::KeyboardEvent(keyboard::Event::KeyPressed {
-            key: _,
-            modifiers,
-            text,
-            ..
-        }) => {
-            // 处理全局快捷键
-            // 使用 text 字段获取按下的字符
-
-            if let Some(text_ref) = text {
-                let char_lower = text_ref.to_lowercase();
-
-                // Cmd+O (macOS) 或 Ctrl+O (Linux/Windows) - 打开文件
-                if (modifiers.command() || modifiers.control()) && char_lower == "o" {
-                    return Task::perform(
-                        async {
-                            let handle = rfd::AsyncFileDialog::new()
-                                .add_filter("Markdown", &["md", "txt"])
-                                .add_filter("所有文件", &["*"])
-                                .set_title("打开文件")
-                                .pick_file()
-                                .await;
-
-                            match handle {
-                                None => Err("已取消".to_string()),
-                                Some(h) => {
-                                    let path = h.path().to_path_buf();
-                                    match editor::file::read_file(&path).await {
-                                        Ok(content) => Ok((path, content)),
-                                        Err(e) => Err(format!("读取失败：{}", e)),
-                                    }
-                                }
-                            }
-                        },
-                        Message::FileOpened,
-                    );
-                }
-
-                // Cmd+S (macOS) 或 Ctrl+S (Linux/Windows) - 保存文件
-                if (modifiers.command() || modifiers.control()) && char_lower == "s" {
-                    if let Some(path) = &app.file_path {
-                        let path = path.clone();
-                        let content = app.buffer.content().to_string();
-                        return Task::perform(
-                            async move {
-                                match editor::file::write_file(&path, &content).await {
-                                    Ok(()) => Ok(()),
-                                    Err(e) => Err(format!("保存失败：{}", e)),
-                                }
-                            },
-                            Message::FileSaved,
-                        );
-                    } else {
-                        let content = app.buffer.content().to_string();
-                        return Task::perform(
-                            async move {
-                                let handle = rfd::AsyncFileDialog::new()
-                                    .add_filter("Markdown", &["md"])
-                                    .add_filter("文本文件", &["txt"])
-                                    .set_title("保存文件")
-                                    .save_file()
-                                    .await;
-
-                                match handle {
-                                    None => Err("已取消".to_string()),
-                                    Some(h) => {
-                                        let path = h.path().to_path_buf();
-                                        match editor::file::write_file(&path, &content).await {
-                                            Ok(()) => Ok(()),
-                                            Err(e) => Err(format!("保存失败：{}", e)),
-                                        }
-                                    }
-                                }
-                            },
-                            Message::FileSaved,
-                        );
                     }
+                    _ => {}
                 }
+            }))
+            .child(
+                div()
+                    .font_family("JetBrains Mono")
+                    .text_sm()
+                    .text_color(rgb(0xcdd6f4))
+                    .child(self.content.clone())
+            )
+    }
 
-                // Cmd+Z (macOS) 或 Ctrl+Z (Linux/Windows) - 撤销
-                if (modifiers.command() || modifiers.control())
-                    && char_lower == "z"
-                    && !modifiers.shift()
-                {
-                    if let Some(previous) = app.history.undo() {
-                        app.editor_content = text_editor::Content::with_text(&previous);
-                        app.buffer.set_content(&previous);
-                        app.preview_html = Renderer::render(&previous);
-                        app.is_modified = true;
-                        app.status_message = "↶ 已撤销".to_string();
-                        app.can_undo = app.history.can_undo();
-                        app.can_redo = app.history.can_redo();
-                    } else {
-                        app.status_message = "⚠ 没有可撤销的操作".to_string();
-                    }
-                    return Task::none();
-                }
+    /// 渲染预览区（右栏）
+    fn render_preview(&self) -> impl IntoElement {
+        let display_text = if self.preview_html.is_empty() {
+            "预览将在此显示".to_string()
+        } else {
+            self.preview_html.clone()
+        };
 
-                // Cmd+Shift+Z (macOS) 或 Ctrl+Shift+Z (Linux/Windows) - 重做
-                if (modifiers.command() || modifiers.control())
-                    && char_lower == "z"
-                    && modifiers.shift()
-                {
-                    if let Some(next) = app.history.redo() {
-                        app.editor_content = text_editor::Content::with_text(&next);
-                        app.buffer.set_content(&next);
-                        app.preview_html = Renderer::render(&next);
-                        app.is_modified = true;
-                        app.status_message = "↷ 已重做".to_string();
-                        app.can_undo = app.history.can_undo();
-                        app.can_redo = app.history.can_redo();
-                    } else {
-                        app.status_message = "⚠ 没有可重做的操作".to_string();
-                    }
-                    return Task::none();
-                }
-            }
+        div()
+            .flex_1()
+            .h_full()
+            .bg(rgb(0x1e1e2e))
+            .p_4()
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .font_family("JetBrains Mono")
+                    .text_sm()
+                    .text_color(rgb(0xcdd6f4))
+                    .child(display_text)
+            )
+    }
 
-            Task::none()
-        }
+    /// 渲染内容区（编辑器 + 预览）
+    fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .gap_2()
+            .p_2()
+            .child(self.render_editor(cx))
+            .child(self.render_preview())
+    }
 
-        _ => Task::none(),
+    /// 渲染状态栏
+    fn render_status_bar(&self) -> impl IntoElement {
+        div()
+            .w_full()
+            .px_4().py_2()
+            .bg(rgb(0x282838))
+            .border_t_1()
+            .border_color(rgb(0x45475a))
+            .text_xs()
+            .text_color(rgb(0xb8bff0))
+            .child(&self.status_message)
     }
 }
 
-/// 构建 UI
-fn view(app: &App) -> Element<'_, Message> {
-    // 文件状态显示
-    let file_name = app
-        .file_path
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("未命名");
-    let modified_indicator = if app.is_modified { " *" } else { "" };
-
-    let file_status = text(format!("{file_name}{modified_indicator}")).size(13);
-
-    // 工具栏
-    let undo_button = if app.can_undo {
-        button("↶ 撤销 (⌘Z)").on_press(Message::Undo).padding(10)
-    } else {
-        button("↶ 撤销").padding(10)
-    };
-
-    let redo_button = if app.can_redo {
-        button("↷ 重做 (⌘⇧Z)").on_press(Message::Redo).padding(10)
-    } else {
-        button("↷ 重做").padding(10)
-    };
-
-    let toolbar = row![
-        button("📁 打开 (⌘O)")
-            .on_press(Message::FileOpen)
-            .padding(10),
-        button("💾 保存 (⌘S)")
-            .on_press(Message::FileSave)
-            .padding(10),
-        undo_button,
-        redo_button,
-        text(" "),
-        file_status,
-    ]
-    .spacing(10)
-    .align_y(alignment::Vertical::Center)
-    .padding(5);
-
-    // 编辑器 - 多行文本编辑器
-    let editor = scrollable(
-        container(
-            text_editor(&app.editor_content)
-                .on_action(Message::EditorAction)
-                .padding(10),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill),
-    )
-    .width(Length::FillPortion(1))
-    .height(Length::Fill);
-
-    // 预览面板 - 显示 HTML 输出
-    let preview_html = Renderer::render(app.buffer.content());
-    let display_text = if preview_html.is_empty() {
-        "预览将在此显示".to_string()
-    } else {
-        preview_html.clone()
-    };
-    let preview = scrollable(text(display_text).width(Length::Fill))
-        .width(Length::FillPortion(1))
-        .height(Length::Fill);
-
-    // 左右两栏布局
-    let content = row![editor, preview]
-        .spacing(10)
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-    // 状态栏
-    let status_bar = text(&app.status_message).size(12);
-
-    // 组装应用
-    let app_layout = column![toolbar, content, status_bar]
-        .spacing(10)
-        .padding(10)
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-    container(app_layout)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-}
-
-/// 生成动态窗口标题
-fn window_title(app: &App) -> String {
-    let modified = if app.is_modified { "* " } else { "" };
-    match &app.file_path {
-        Some(p) => format!(
-            "{}{} — Lucid",
-            modified,
-            p.file_name().and_then(|n| n.to_str()).unwrap_or("文件")
-        ),
-        None => format!("{modified}未命名 — Lucid"),
+/// 实现 Render trait（GPUI 的核心渲染接口，替代 iced 的 view fn）
+impl Render for LucidApp {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context("LucidApp")
+            .track_focus(&self.focus_handle)
+            // 注册 Action 处理器（替代 update() 中的 match 分支）
+            .on_action(cx.listener(Self::handle_open_file))
+            .on_action(cx.listener(Self::handle_save_file))
+            .on_action(cx.listener(Self::handle_undo))
+            .on_action(cx.listener(Self::handle_redo))
+            .flex()
+            .flex_col()
+            .w_full()
+            .h_full()
+            .bg(rgb(0x1e1e2e))
+            .child(self.render_toolbar(cx))
+            .child(self.render_content(cx))
+            .child(self.render_status_bar())
     }
 }
 
-/// 订阅全局键盘事件
-fn subscription(_app: &App) -> Subscription<Message> {
-    use iced::Event;
-    use iced::event;
+/// 应用入口（替代 `iced::application(...).run()`）
+fn main() {
+    Application::new().run(|cx: &mut gpui::App| {
+        // 全局快捷键绑定（替代 subscription + event::listen()）
+        cx.bind_keys([
+            KeyBinding::new(&["cmd-o"], OpenFile, None),
+            KeyBinding::new(&["cmd-s"], SaveFile, None),
+            KeyBinding::new(&["cmd-z"], Undo, None),
+            KeyBinding::new(&["cmd-shift-z"], Redo, None),
+        ]);
 
-    event::listen()
-        .map(|event| match event {
-            Event::Keyboard(kb_event) => Some(Message::KeyboardEvent(kb_event)),
-            _ => None,
-        })
-        .filter_map(std::convert::identity)
-}
+        // 打开主窗口
+        cx.open_window(
+            WindowOptions::default(),
+            |_window, cx| cx.new(|cx| LucidApp::new(cx)),
+        ).unwrap();
 
-/// 应用启动函数 - 返回初始状态和可选的初始任务
-fn boot() -> (App, Task<Message>) {
-    (App::default(), Task::none())
-}
-
-/// 应用入口
-pub fn main() -> iced::Result {
-    iced::application(boot, update, view)
-        .title(window_title)
-        .subscription(subscription)
-        .run()
+        cx.activate(true);
+    });
 }
