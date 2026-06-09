@@ -1,4 +1,5 @@
 // UI 模块 - Message 定义
+use iced::keyboard;
 use iced::widget::text_editor;
 use std::path::PathBuf;
 
@@ -19,6 +20,8 @@ pub enum Message {
     FileSaved(Result<(), String>),
     /// 撤销请求 (Ctrl+Z)
     Undo,
-    /// 重做请求 (Ctrl+Y 或 Ctrl+Shift+Z)
+    /// 重做请求 (Cmd+Shift+Z)
     Redo,
+    /// 键盘事件 - 用于全局快捷键捕获
+    KeyboardEvent(keyboard::Event),
 }

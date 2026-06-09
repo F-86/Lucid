@@ -6,8 +6,9 @@ mod ui;
 use crate::editor::buffer::Buffer;
 use crate::editor::history::History;
 use crate::markdown::Renderer;
+use iced::keyboard;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor};
-use iced::{Element, Length, Task, alignment};
+use iced::{Element, Length, Subscription, Task, alignment};
 use std::path::PathBuf;
 use ui::Message;
 
@@ -200,6 +201,129 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+
+        Message::KeyboardEvent(keyboard::Event::KeyPressed {
+            key: _,
+            modifiers,
+            text,
+            ..
+        }) => {
+            // 处理全局快捷键
+            // 使用 text 字段获取按下的字符
+
+            if let Some(text_ref) = text {
+                let char_lower = text_ref.to_lowercase();
+
+                // Cmd+O (macOS) 或 Ctrl+O (Linux/Windows) - 打开文件
+                if (modifiers.command() || modifiers.control()) && char_lower == "o" {
+                    return Task::perform(
+                        async {
+                            let handle = rfd::AsyncFileDialog::new()
+                                .add_filter("Markdown", &["md", "txt"])
+                                .add_filter("所有文件", &["*"])
+                                .set_title("打开文件")
+                                .pick_file()
+                                .await;
+
+                            match handle {
+                                None => Err("已取消".to_string()),
+                                Some(h) => {
+                                    let path = h.path().to_path_buf();
+                                    match editor::file::read_file(&path).await {
+                                        Ok(content) => Ok((path, content)),
+                                        Err(e) => Err(format!("读取失败：{}", e)),
+                                    }
+                                }
+                            }
+                        },
+                        Message::FileOpened,
+                    );
+                }
+
+                // Cmd+S (macOS) 或 Ctrl+S (Linux/Windows) - 保存文件
+                if (modifiers.command() || modifiers.control()) && char_lower == "s" {
+                    if let Some(path) = &app.file_path {
+                        let path = path.clone();
+                        let content = app.buffer.content().to_string();
+                        return Task::perform(
+                            async move {
+                                match editor::file::write_file(&path, &content).await {
+                                    Ok(()) => Ok(()),
+                                    Err(e) => Err(format!("保存失败：{}", e)),
+                                }
+                            },
+                            Message::FileSaved,
+                        );
+                    } else {
+                        let content = app.buffer.content().to_string();
+                        return Task::perform(
+                            async move {
+                                let handle = rfd::AsyncFileDialog::new()
+                                    .add_filter("Markdown", &["md"])
+                                    .add_filter("文本文件", &["txt"])
+                                    .set_title("保存文件")
+                                    .save_file()
+                                    .await;
+
+                                match handle {
+                                    None => Err("已取消".to_string()),
+                                    Some(h) => {
+                                        let path = h.path().to_path_buf();
+                                        match editor::file::write_file(&path, &content).await {
+                                            Ok(()) => Ok(()),
+                                            Err(e) => Err(format!("保存失败：{}", e)),
+                                        }
+                                    }
+                                }
+                            },
+                            Message::FileSaved,
+                        );
+                    }
+                }
+
+                // Cmd+Z (macOS) 或 Ctrl+Z (Linux/Windows) - 撤销
+                if (modifiers.command() || modifiers.control())
+                    && char_lower == "z"
+                    && !modifiers.shift()
+                {
+                    if let Some(previous) = app.history.undo() {
+                        app.editor_content = text_editor::Content::with_text(&previous);
+                        app.buffer.set_content(&previous);
+                        app.preview_html = Renderer::render(&previous);
+                        app.is_modified = true;
+                        app.status_message = "↶ 已撤销".to_string();
+                        app.can_undo = app.history.can_undo();
+                        app.can_redo = app.history.can_redo();
+                    } else {
+                        app.status_message = "⚠ 没有可撤销的操作".to_string();
+                    }
+                    return Task::none();
+                }
+
+                // Cmd+Shift+Z (macOS) 或 Ctrl+Shift+Z (Linux/Windows) - 重做
+                if (modifiers.command() || modifiers.control())
+                    && char_lower == "z"
+                    && modifiers.shift()
+                {
+                    if let Some(next) = app.history.redo() {
+                        app.editor_content = text_editor::Content::with_text(&next);
+                        app.buffer.set_content(&next);
+                        app.preview_html = Renderer::render(&next);
+                        app.is_modified = true;
+                        app.status_message = "↷ 已重做".to_string();
+                        app.can_undo = app.history.can_undo();
+                        app.can_redo = app.history.can_redo();
+                    } else {
+                        app.status_message = "⚠ 没有可重做的操作".to_string();
+                    }
+                    return Task::none();
+                }
+            }
+
+            Task::none()
+        }
+
+        _ => Task::none(),
     }
 }
 
@@ -218,26 +342,22 @@ fn view(app: &App) -> Element<'_, Message> {
 
     // 工具栏
     let undo_button = if app.can_undo {
-        button("↶ 撤销 (Ctrl+Z)")
-            .on_press(Message::Undo)
-            .padding(10)
+        button("↶ 撤销 (⌘Z)").on_press(Message::Undo).padding(10)
     } else {
         button("↶ 撤销").padding(10)
     };
 
     let redo_button = if app.can_redo {
-        button("↷ 重做 (Ctrl+Y)")
-            .on_press(Message::Redo)
-            .padding(10)
+        button("↷ 重做 (⌘⇧Z)").on_press(Message::Redo).padding(10)
     } else {
         button("↷ 重做").padding(10)
     };
 
     let toolbar = row![
-        button("📁 打开 (Ctrl+O)")
+        button("📁 打开 (⌘O)")
             .on_press(Message::FileOpen)
             .padding(10),
-        button("💾 保存 (Ctrl+S)")
+        button("💾 保存 (⌘S)")
             .on_press(Message::FileSave)
             .padding(10),
         undo_button,
@@ -308,6 +428,19 @@ fn window_title(app: &App) -> String {
     }
 }
 
+/// 订阅全局键盘事件
+fn subscription(_app: &App) -> Subscription<Message> {
+    use iced::Event;
+    use iced::event;
+
+    event::listen()
+        .map(|event| match event {
+            Event::Keyboard(kb_event) => Some(Message::KeyboardEvent(kb_event)),
+            _ => None,
+        })
+        .filter_map(std::convert::identity)
+}
+
 /// 应用启动函数 - 返回初始状态和可选的初始任务
 fn boot() -> (App, Task<Message>) {
     (App::default(), Task::none())
@@ -317,5 +450,6 @@ fn boot() -> (App, Task<Message>) {
 pub fn main() -> iced::Result {
     iced::application(boot, update, view)
         .title(window_title)
+        .subscription(subscription)
         .run()
 }
